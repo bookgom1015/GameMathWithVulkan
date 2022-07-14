@@ -58,5 +58,6 @@
     <None Include="Assets\Shaders\Shader.vert">
       <Filter>Shader Files</Filter>
     </None>
+    <None Include=".gitignore" />
   </ItemGroup>
 </Project>

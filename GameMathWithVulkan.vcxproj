@@ -150,6 +150,7 @@
     <ClInclude Include="include\GameTimer.h" />
   </ItemGroup>
   <ItemGroup>
+    <None Include=".gitignore" />
     <None Include="Assets\Shaders\Shader.frag" />
     <None Include="Assets\Shaders\Shader.vert" />
   </ItemGroup>

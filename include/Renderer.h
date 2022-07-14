@@ -25,6 +25,32 @@ namespace std {
 	};
 }
 
+enum RenderTypes {
+	EOpaque,
+	EBlend
+};
+
+struct RenderItem {
+	VkBuffer VertexBuffer;
+	VkDeviceMemory VertexBufferMemory;
+
+	VkBuffer IndexBuffer;
+	VkDeviceMemory IndexBufferMemory;
+
+	std::vector<VkBuffer> UniformBuffers;
+	std::vector<VkDeviceMemory> UniformBufferMemories;
+
+	std::vector<VkDescriptorSet> DescriptorSets;
+
+	std::unordered_map<Vertex, std::uint32_t> UniqueVertices;
+	std::vector<Vertex> Vertices;
+	std::vector<std::uint32_t> Indices;
+
+	glm::vec3 Scale = glm::vec3(1.0f);
+	glm::vec4 Quat = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+	glm::vec3 Pos = glm::vec3(0.0f, 0.0f, 0.0f);
+};
+
 class Renderer : LowRenderer {
 protected:
 	struct UniformBufferObject {
@@ -49,7 +75,20 @@ public:
 
 	virtual void OnResize(int inClientWidth, int inClientHeight) override;
 
-	bool AddModel(const std::string& inFilePath);
+	bool AddModel(
+		const std::string& inFilePath, 
+		const std::string& inName, 
+		const glm::vec3& inScale = glm::vec3(1.0f),
+		const glm::vec3& inPos = glm::vec3(0.0f), 
+		const glm::vec4& inQuat = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+	bool AddTexture(const std::string& inFilePath);
+
+	bool UpdateCamera(const glm::vec3& inPos, const glm::vec3& inTarget);
+	bool UpdateModel(
+		const std::string& inName,
+		glm::vec3 inScale = glm::vec3(1.0f),
+		glm::vec3 inPos = glm::vec3(0.0f),
+		glm::vec4 inQuat = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
 
 	bool Update(const GameTimer& gt);
 	bool Draw();
@@ -60,9 +99,16 @@ protected:
 
 private:
 	bool UpdateUniformBuffer(const GameTimer& gt);
+	bool UpdateDescriptorSet();
 
-	bool CreateVertexBuffer(const std::string& inFilePath);
-	bool CreateIndexBuffer(const std::string& inFilePath);
+	bool CreateVertexBuffer(RenderItem& inRItem);
+	bool CreateIndexBuffer(RenderItem& inRItem);
+	bool CreateUniformBuffers(RenderItem& inRItem);
+	bool RecreateUniformBuffers();
+	bool CreateDescriptorSets(RenderItem& inRItem);
+	bool RecreateDescriptorSets();
+	bool CreateTextureImage(int inTexWidth, int inTexHeight, void* pData);
+	bool CreateTextureImageView();
 
 	bool CreateImageViews();
 	bool CreateRenderPass();
@@ -70,19 +116,18 @@ private:
 	bool CreateColorResources();
 	bool CreateDepthResources();
 	bool CreateFramebuffers();
-	bool CreateTextureImages();
-	bool CreateTextureImageViews();
 	bool CreateTextureSamplers();
 	bool CreateDescriptorSetLayout();
 	bool CreateGraphicsPipeline();
-	bool CreateUniformBuffers();
 	bool CreateDescriptorPool();
-	bool CreateDescriptorSets();
 	bool CreateCommandBuffers();
 	bool CreateSyncObjects();
 
 private:
 	bool bIsCleanedUp = false;
+
+public:
+	VkFormat ImageFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
 protected:
 	std::vector<VkImageView> mSwapChainImageViews;
@@ -109,24 +154,13 @@ protected:
 
 	VkDescriptorSetLayout mDescriptorSetLayout;
 	VkDescriptorPool mDescriptorPool;
-	std::vector<VkDescriptorSet> mDescriptorSets;
 
 	VkPipelineLayout mPipelineLayout;
 	VkPipeline mGraphicsPipeline;
 
 	std::string mModelFilePath;
-	std::unordered_map<std::string, std::unordered_map<Vertex, std::uint32_t>> mObjUniqueVerticesSet;
-	std::unordered_map<std::string, std::vector<Vertex>> mObjVerticesSet;
-	std::unordered_map<std::string, std::vector<std::uint32_t>> mObjIndicesSet;
 
-	VkBuffer mObjVertexBuffer;
-	VkDeviceMemory mObjVertexBufferMemory;
-
-	VkBuffer mObjIndexBuffer;
-	VkDeviceMemory mObjIndexBufferMemory;
-
-	std::vector<VkBuffer> mUniformBuffers;
-	std::vector<VkDeviceMemory> mUniformBufferMemories;
+	std::unordered_map<std::string, RenderItem> mRItems;
 
 	std::vector<VkSemaphore> mImageAvailableSemaphores;
 	std::vector<VkSemaphore> mRenderFinishedSemaphores;
@@ -135,5 +169,9 @@ protected:
 	std::uint32_t mCurentImageIndex = 0;
 	size_t mCurrentFrame = 0;
 
+	glm::vec3 mCameraPos = ZeroVector;
+	glm::vec3 mCameraTarget = ForwardVector;
+
 	bool bFramebufferResized = false;
+	bool bNeedToUpdateDescriptorSet = false;
 };

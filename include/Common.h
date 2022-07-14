@@ -12,14 +12,18 @@
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_FORCE_LEFT_HANDED
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/hash.hpp>
 
+#include <glm/gtx/rotate_vector.hpp>
+
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -100,17 +104,30 @@
 #endif
 
 #ifndef CheckReturn
-#define CheckReturn(__statement)											\
-	{																		\
-		bool __result = __statement;										\
-		if (!__result) {													\
-			std::wstringstream __wsstream_CR;								\
-			__wsstream_CR << __FILE__ << L"; line: " << __LINE__ << L"; ";	\
-			WLogln(__wsstream_CR.str());									\
-			return false;													\
-		}																	\
+#define CheckReturn(__statement)															\
+	{																						\
+		try {																				\
+			bool __result = __statement;													\
+			if (!__result) {																\
+				std::wstringstream __wsstream_CR;											\
+				__wsstream_CR << __FILE__ << L"; line: " << __LINE__ << L"; ";				\
+				WLogln(__wsstream_CR.str());												\
+				return false;																\
+			}																				\
+		}																					\
+		catch (const std::exception& e) {													\
+			std::wstringstream __wsstream_CR;												\
+				__wsstream_CR << __FILE__ << L"; line: " << __LINE__ << L"; " << e.what();	\
+				WLogln(__wsstream_CR.str());												\
+			return false;																	\
+		}																					\
 	}
 #endif
+
+static const glm::vec3 ZeroVector		= glm::vec3(0.0f);
+static const glm::vec3 RightVector		= glm::vec3(1.0f, 0.0f, 0.0f);
+static const glm::vec3 UpVector			= glm::vec3(0.0f, 1.0f, 0.0f);
+static const glm::vec3 ForwardVector	= glm::vec3(0.0f, 0.0f, 1.0f);
 
 namespace StringUtil {
 	class StringUtilHelper {
