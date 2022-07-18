@@ -26,29 +26,44 @@ namespace std {
 }
 
 enum RenderTypes {
-	EOpaque,
-	EBlend
+	EOpaque = 0,
+	EBlend,
+	ENumTypes,
 };
 
-struct RenderItem {
+struct Mesh {
 	VkBuffer VertexBuffer;
 	VkDeviceMemory VertexBufferMemory;
 
 	VkBuffer IndexBuffer;
 	VkDeviceMemory IndexBufferMemory;
 
-	std::vector<VkBuffer> UniformBuffers;
-	std::vector<VkDeviceMemory> UniformBufferMemories;
-
-	std::vector<VkDescriptorSet> DescriptorSets;
-
 	std::unordered_map<Vertex, std::uint32_t> UniqueVertices;
 	std::vector<Vertex> Vertices;
 	std::vector<std::uint32_t> Indices;
+};
+
+struct RenderItem {
+	std::vector<VkDescriptorSet> DescriptorSets;
+
+	std::vector<VkBuffer> UniformBuffers;
+	std::vector<VkDeviceMemory> UniformBufferMemories;
+
+	std::string MeshName;
+	std::string MatName;
 
 	glm::vec3 Scale = glm::vec3(1.0f);
-	glm::vec4 Quat = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+	glm::fquat Quat = glm::quat(0.0f, 0.0f, 0.0f, 1.0f);
 	glm::vec3 Pos = glm::vec3(0.0f, 0.0f, 0.0f);
+};
+
+struct Material {
+	VkImage TextureImage;
+	VkDeviceMemory TextureImageMemory;
+	VkImageView TextureImageView;
+	VkSampler TextureSampler;
+
+	std::uint32_t MipLevels;
 };
 
 class Renderer : LowRenderer {
@@ -77,18 +92,21 @@ public:
 
 	bool AddModel(
 		const std::string& inFilePath, 
+		const std::string& inTexFilePath,
 		const std::string& inName, 
-		const glm::vec3& inScale = glm::vec3(1.0f),
-		const glm::vec3& inPos = glm::vec3(0.0f), 
-		const glm::vec4& inQuat = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-	bool AddTexture(const std::string& inFilePath);
+		RenderTypes inType = RenderTypes::EOpaque,
+		bool bFlipped = false,
+		glm::vec3 inScale = glm::vec3(1.0f),
+		glm::fquat inQuat = glm::fquat(0.0f, 0.0f, 0.0f, 1.0f),
+		glm::vec3 inPos = glm::vec3(0.0f));
 
 	bool UpdateCamera(const glm::vec3& inPos, const glm::vec3& inTarget);
 	bool UpdateModel(
 		const std::string& inName,
+		RenderTypes inType,
 		glm::vec3 inScale = glm::vec3(1.0f),
-		glm::vec3 inPos = glm::vec3(0.0f),
-		glm::vec4 inQuat = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+		glm::fquat inQuat = glm::fquat(0.0f, 0.0f, 0.0f, 1.0f),
+		glm::vec3 inPos = glm::vec3(0.0f));
 
 	bool Update(const GameTimer& gt);
 	bool Draw();
@@ -98,17 +116,20 @@ protected:
 	virtual void CleanUpSwapChain() override;
 
 private:
+	bool AddTexture(const std::string& inFilePath);
+
 	bool UpdateUniformBuffer(const GameTimer& gt);
 	bool UpdateDescriptorSet();
 
-	bool CreateVertexBuffer(RenderItem& inRItem);
-	bool CreateIndexBuffer(RenderItem& inRItem);
-	bool CreateUniformBuffers(RenderItem& inRItem);
+	bool CreateVertexBuffer(Mesh* ioMesh);
+	bool CreateIndexBuffer(Mesh* ioMesh);
+	bool CreateUniformBuffers(RenderItem* inRItem);
 	bool RecreateUniformBuffers();
-	bool CreateDescriptorSets(RenderItem& inRItem);
+	bool CreateDescriptorSets(RenderItem* inRItem);
 	bool RecreateDescriptorSets();
-	bool CreateTextureImage(int inTexWidth, int inTexHeight, void* pData);
-	bool CreateTextureImageView();
+	bool CreateTextureImage(int inTexWidth, int inTexHeight, void* pData, Material* ioMaterial);
+	bool CreateTextureImageView(Material* ioMaterial);
+	bool CreateTextureSampler(Material* ioMaterial);
 
 	bool CreateImageViews();
 	bool CreateRenderPass();
@@ -116,7 +137,6 @@ private:
 	bool CreateColorResources();
 	bool CreateDepthResources();
 	bool CreateFramebuffers();
-	bool CreateTextureSamplers();
 	bool CreateDescriptorSetLayout();
 	bool CreateGraphicsPipeline();
 	bool CreateDescriptorPool();
@@ -145,12 +165,8 @@ protected:
 	VkDeviceMemory mDepthImageMemory;
 	VkImageView mDepthImageView;
 
-	std::uint32_t mMipLevels;
-	VkImage mTextureImage;
-	VkDeviceMemory mTextureImageMemory;
-	VkImageView mTextureImageView;
-
-	VkSampler mTextureSampler;
+	std::unordered_map<std::string, std::unique_ptr<Mesh>> mMeshes;
+	std::unordered_map<std::string, std::unique_ptr<Material>> mMaterials;
 
 	VkDescriptorSetLayout mDescriptorSetLayout;
 	VkDescriptorPool mDescriptorPool;
@@ -160,7 +176,9 @@ protected:
 
 	std::string mModelFilePath;
 
-	std::unordered_map<std::string, RenderItem> mRItems;
+	std::vector<std::unique_ptr<RenderItem>> mRItems;
+	std::unordered_map<std::string, RenderItem*> mRItemRefs[RenderTypes::ENumTypes];
+	std::multimap<float, RenderItem*> mOrderedRItemRefs;
 
 	std::vector<VkSemaphore> mImageAvailableSemaphores;
 	std::vector<VkSemaphore> mRenderFinishedSemaphores;

@@ -2,6 +2,7 @@
 
 #pragma comment(lib, "glfw3.lib")
 #pragma comment(lib, "vulkan-1.lib")
+#pragma comment(lib, "GameMath.lib")
 
 #define VK_USE_PLATFORM_WIN32_KHR
 #define GLFW_INCLUDE_VULKAN
@@ -15,11 +16,13 @@
 #define GLM_FORCE_LEFT_HANDED
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/hash.hpp>
-
 #include <glm/gtx/rotate_vector.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/rotate_normalized_axis.hpp>
+
+#include <DirectXMath.h>
 
 #include <algorithm>
 #include <array>
@@ -35,6 +38,7 @@
 #include <Windows.h>
 
 #include "GameTimer.h"
+#include "GameMath.h"
 
 #undef min
 #undef max

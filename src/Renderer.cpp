@@ -514,7 +514,6 @@ bool Renderer::Initialize(int inClientWidth, int inClientHeight, GLFWwindow* pWn
 	CheckReturn(CreateColorResources());
 	CheckReturn(CreateDepthResources());
 	CheckReturn(CreateFramebuffers());
-	CheckReturn(CreateTextureSamplers());
 	CheckReturn(CreateDescriptorSetLayout());
 	CheckReturn(CreateGraphicsPipeline());
 	CheckReturn(CreateDescriptorPool());
@@ -526,12 +525,6 @@ bool Renderer::Initialize(int inClientWidth, int inClientHeight, GLFWwindow* pWn
 
 void Renderer::CleanUp() {
 	vkDeviceWaitIdle(mDevice);
-
-	vkDestroySampler(mDevice, mTextureSampler, nullptr);
-	vkDestroyImageView(mDevice, mTextureImageView, nullptr);
-	
-	vkDestroyImage(mDevice, mTextureImage, nullptr);
-	vkFreeMemory(mDevice, mTextureImageMemory, nullptr);
 	
 	for (size_t i = 0; i < SwapChainImageCount; ++i) {
 		vkDestroyFence(mDevice, mInFlightFences[i], nullptr);
@@ -539,12 +532,23 @@ void Renderer::CleanUp() {
 		vkDestroySemaphore(mDevice, mImageAvailableSemaphores[i], nullptr);
 	}
 
-	for (auto& ritem : mRItems) {
-		vkDestroyBuffer(mDevice, ritem.second.IndexBuffer, nullptr);
-		vkFreeMemory(mDevice, ritem.second.IndexBufferMemory, nullptr);
+	for (const auto& matPair : mMaterials) {
+		const auto& mat = matPair.second;
+		vkDestroySampler(mDevice, mat->TextureSampler, nullptr);
 
-		vkDestroyBuffer(mDevice, ritem.second.VertexBuffer, nullptr);
-		vkFreeMemory(mDevice, ritem.second.VertexBufferMemory, nullptr);
+		vkDestroyImageView(mDevice, mat->TextureImageView, nullptr);
+
+		vkDestroyImage(mDevice, mat->TextureImage, nullptr);
+		vkFreeMemory(mDevice, mat->TextureImageMemory, nullptr);
+	}
+
+	for (const auto& meshPair : mMeshes) {
+		const auto& mesh = meshPair.second;
+		vkDestroyBuffer(mDevice, mesh->IndexBuffer, nullptr);
+		vkFreeMemory(mDevice, mesh->IndexBufferMemory, nullptr);
+
+		vkDestroyBuffer(mDevice, mesh->VertexBuffer, nullptr);
+		vkFreeMemory(mDevice, mesh->VertexBufferMemory, nullptr);
 	}
 
 	vkDestroyDescriptorSetLayout(mDevice, mDescriptorSetLayout, nullptr);
@@ -564,71 +568,78 @@ void Renderer::OnResize(int inClientWidth, int inClientHeight) {
 	bFramebufferResized = true;
 }
 
-bool Renderer::AddModel(const std::string& inFilePath, const std::string& inName, const glm::vec3& inScale, const glm::vec3& inPos, const glm::vec4& inQuat) {
-	tinyobj::attrib_t attrib;
-	std::vector<tinyobj::shape_t> shapes;
-	std::vector<tinyobj::material_t> materials;
-	std::string warn, err;
+bool Renderer::AddModel(
+		const std::string& inFilePath, 
+		const std::string& inTexFilePath,
+		const std::string& inName, 
+		RenderTypes inType,
+		bool bFlipped,
+		glm::vec3 inScale, 
+		glm::fquat inQuat,
+		glm::vec3 inPos) {
+	if (mMeshes.count(inFilePath) == 0) {
+		tinyobj::attrib_t attrib;
+		std::vector<tinyobj::shape_t> shapes;
+		std::vector<tinyobj::material_t> materials;
+		std::string warn, err;
 
-	if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, inFilePath.c_str())) {
-		std::wstringstream wsstream;
-		wsstream << warn.c_str() << err.c_str();
-		ReturnFalse(wsstream.str());
-	}
-
-	auto& ritem = mRItems[inName];
-	ritem.Scale = inScale;
-	ritem.Quat = inQuat;
-	ritem.Pos = inPos;
-
-	for (const auto& shape : shapes) {
-		for (const auto& index : shape.mesh.indices) {
-			Vertex vertex = {};
-
-			vertex.mPos = {
-				attrib.vertices[3 * index.vertex_index + 0],
-				attrib.vertices[3 * index.vertex_index + 1],
-				attrib.vertices[3 * index.vertex_index + 2]
-			};
-
-			vertex.mTexCoord = {
-				attrib.texcoords[2 * index.texcoord_index + 0],
-				attrib.texcoords[2 * index.texcoord_index + 1],
-			};
-
-			vertex.mColor = { 1.0f, 1.0f, 1.0f };
-
-			if (ritem.UniqueVertices.count(vertex) == 0) {
-				ritem.UniqueVertices[vertex] = static_cast<std::uint32_t>(ritem.Vertices.size());
-				ritem.Vertices.push_back(vertex);
-			}
-
-			ritem.Indices.push_back(static_cast<std::uint32_t>(ritem.UniqueVertices[vertex]));
+		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, inFilePath.c_str())) {
+			std::wstringstream wsstream;
+			wsstream << warn.c_str() << err.c_str();
+			ReturnFalse(wsstream.str());
 		}
+
+		auto mesh = std::make_unique<Mesh>();
+
+		for (const auto& shape : shapes) {
+			for (const auto& index : shape.mesh.indices) {
+				Vertex vertex = {};
+
+				vertex.mPos = {
+					attrib.vertices[3 * index.vertex_index + 0],
+					attrib.vertices[3 * index.vertex_index + 1],
+					attrib.vertices[3 * index.vertex_index + 2]
+				};
+
+				float texY = attrib.texcoords[2 * index.texcoord_index + 1];
+				vertex.mTexCoord = {
+					attrib.texcoords[2 * index.texcoord_index + 0],
+					bFlipped ? 1.0f - texY : texY,
+				};
+
+				vertex.mColor = { 1.0f, 1.0f, 1.0f };
+
+				if (mesh->UniqueVertices.count(vertex) == 0) {
+					mesh->UniqueVertices[vertex] = static_cast<std::uint32_t>(mesh->Vertices.size());
+					mesh->Vertices.push_back(vertex);
+				}
+
+				mesh->Indices.push_back(static_cast<std::uint32_t>(mesh->UniqueVertices[vertex]));
+			}
+		}
+
+		CheckReturn(CreateVertexBuffer(mesh.get()));
+		CheckReturn(CreateIndexBuffer(mesh.get()));
+
+		mMeshes[inFilePath] = std::move(mesh);
 	}
 
-	CheckReturn(CreateVertexBuffer(ritem));
-	CheckReturn(CreateIndexBuffer(ritem));
-	CheckReturn(CreateUniformBuffers(ritem));
-	CheckReturn(CreateDescriptorSets(ritem));
+	if (mMaterials.count(inTexFilePath) == 0) {
+		CheckReturn(AddTexture(inTexFilePath));
+	}
 
-	return true;
-}
+	auto ritem = std::make_unique<RenderItem>();
+	ritem->Scale = inScale;
+	ritem->Quat = inQuat;
+	ritem->Pos = inPos;
+	ritem->MeshName = inFilePath;
+	ritem->MatName = inTexFilePath;
 
-bool Renderer::AddTexture(const std::string& inFilePath) {
-	int texWidth = 0;
-	int texHeight = 0;
-	int texChannels = 0;
+	CheckReturn(CreateUniformBuffers(ritem.get()));
+	CheckReturn(CreateDescriptorSets(ritem.get()));
 
-	stbi_uc* pixels = stbi_load(inFilePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-	if (!pixels) ReturnFalse(L"Failed to load texture image");
-
-	CheckReturn(CreateTextureImage(texWidth, texHeight, pixels));
-	CheckReturn(CreateTextureImageView());
-
-	stbi_image_free(pixels);
-
-	bNeedToUpdateDescriptorSet = true;
+	mRItemRefs[inType][inName] = ritem.get();
+	mRItems.push_back(std::move(ritem));
 
 	return true;
 }
@@ -640,10 +651,15 @@ bool Renderer::UpdateCamera(const glm::vec3& inPos, const glm::vec3& inTarget) {
 	return true;
 }
 
-bool Renderer::UpdateModel(const std::string& inName, glm::vec3 inScale, glm::vec3 inPos, glm::vec4 inQuat) {
-	mRItems[inName].Scale = inScale;
-	mRItems[inName].Quat = inQuat;
-	mRItems[inName].Pos = inPos;
+bool Renderer::UpdateModel(
+		const std::string& inName, 
+		RenderTypes inType, 
+		glm::vec3 inScale, 
+		glm::fquat inQuat, 
+		glm::vec3 inPos) {
+	mRItemRefs[inType][inName]->Scale = inScale;
+	mRItemRefs[inType][inName]->Quat = inQuat;
+	mRItemRefs[inType][inName]->Pos = inPos;
 
 	return true;
 }
@@ -672,14 +688,23 @@ bool Renderer::Update(const GameTimer& gt) {
 		vkWaitForFences(mDevice, 1, &mImagesInFlight[mCurentImageIndex], VK_TRUE, UINT64_MAX);
 	
 	mImagesInFlight[mCurentImageIndex] = mInFlightFences[mCurrentFrame];
-
+	
 	CheckReturn(UpdateUniformBuffer(gt));
 	
 	if (bNeedToUpdateDescriptorSet) {
 		CheckReturn(UpdateDescriptorSet());
 		bNeedToUpdateDescriptorSet = false;
 	}
+	
+	mOrderedRItemRefs.clear();
+	const auto& blendRItemRefs = mRItemRefs[RenderTypes::EBlend];
+	for (const auto& blendRItemRefPair : blendRItemRefs) {
+		const auto& blendRItemRef = blendRItemRefPair.second;
 
+		float dist = glm::distance(mCameraPos, blendRItemRef->Pos);
+		mOrderedRItemRefs.insert(std::make_pair(dist, blendRItemRef));
+	}
+	
 	return true;
 }
 
@@ -717,16 +742,34 @@ bool Renderer::Draw() {
 
 	vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, mGraphicsPipeline);
 	
-	for (auto& ritem : mRItems) {
-		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &ritem.second.DescriptorSets[mCurrentFrame], 0, nullptr);
+	for (const auto& ritemRefPair : mRItemRefs[RenderTypes::EOpaque]) {
+		const auto& ritemRef = ritemRefPair.second;
+		const auto& mesh = mMeshes[ritemRef->MeshName];
 
-		VkBuffer vertexBuffers[] = { ritem.second.VertexBuffer };
+		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &ritemRef->DescriptorSets[mCurrentFrame], 0, nullptr);
+	
+		VkBuffer vertexBuffers[] = { mesh->VertexBuffer };
 		VkDeviceSize offsets[] = { 0 };
 		vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 	
-		vkCmdBindIndexBuffer(commandBuffer, ritem.second.IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+		vkCmdBindIndexBuffer(commandBuffer, mesh->IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 	
-		vkCmdDrawIndexed(commandBuffer, static_cast<std::uint32_t>(ritem.second.Indices.size()), 1, 0, 0, 0);
+		vkCmdDrawIndexed(commandBuffer, static_cast<std::uint32_t>(mesh->Indices.size()), 1, 0, 0, 0);
+	}
+
+	for (auto begin = mOrderedRItemRefs.rbegin(), end = mOrderedRItemRefs.rend(); begin != end; ++begin) {
+		const auto& ritemRef = begin->second;
+		const auto& mesh = mMeshes[ritemRef->MeshName];
+
+		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &ritemRef->DescriptorSets[mCurrentFrame], 0, nullptr);
+	
+		VkBuffer vertexBuffers[] = { mesh->VertexBuffer };
+		VkDeviceSize offsets[] = { 0 };
+		vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+	
+		vkCmdBindIndexBuffer(commandBuffer, mesh->IndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+	
+		vkCmdDrawIndexed(commandBuffer, static_cast<std::uint32_t>(mesh->Indices.size()), 1, 0, 0, 0);
 	}
 
 	vkCmdEndRenderPass(commandBuffer);
@@ -820,8 +863,8 @@ void Renderer::CleanUpSwapChain() {
 	
 	for (auto& ritem : mRItems) {
 		for (size_t i = 0; i < SwapChainImageCount; ++i) {
-			vkDestroyBuffer(mDevice, ritem.second.UniformBuffers[i], nullptr);
-			vkFreeMemory(mDevice, ritem.second.UniformBufferMemories[i], nullptr);
+			vkDestroyBuffer(mDevice, ritem->UniformBuffers[i], nullptr);
+			vkFreeMemory(mDevice, ritem->UniformBufferMemories[i], nullptr);
 		}
 	}
 	
@@ -844,15 +887,36 @@ void Renderer::CleanUpSwapChain() {
 	LowRenderer::CleanUpSwapChain();
 }
 
+bool Renderer::AddTexture(const std::string& inFilePath) {
+	int texWidth = 0;
+	int texHeight = 0;
+	int texChannels = 0;
+
+	stbi_uc* pixels = stbi_load(inFilePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+	if (!pixels) ReturnFalse(L"Failed to load texture image");
+
+	auto material = std::make_unique<Material>();
+	auto pMat = material.get();
+	CheckReturn(CreateTextureImage(texWidth, texHeight, pixels, pMat));
+	CheckReturn(CreateTextureImageView(pMat));
+	CheckReturn(CreateTextureSampler(pMat));
+	mMaterials[inFilePath] = std::move(material);
+
+	stbi_image_free(pixels);
+
+	bNeedToUpdateDescriptorSet = true;
+
+	return true;
+}
+
 bool Renderer::UpdateUniformBuffer(const GameTimer& gt) {
 	for (auto& ritem : mRItems) {
-		UniformBufferObject ubo = {};
+		UniformBufferObject ubo = {};		
 
-		ubo.mModel = glm::translate(glm::mat4(1.0f), ritem.second.Pos) *
-			glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), RightVector) *
-			glm::rotate(glm::mat4(1.0f), glm::radians(180.0f), UpVector) *
-			glm::scale(glm::mat4(1.0f), ritem.second.Scale);		
-
+		ubo.mModel = glm::translate(glm::mat4(1.0f), ritem->Pos) *
+			glm::mat4_cast(ritem->Quat) *
+			glm::scale(glm::mat4(1.0f), ritem->Scale);		
+		
 		ubo.mView = glm::lookAt(
 			mCameraPos,
 			mCameraTarget,
@@ -862,7 +926,7 @@ bool Renderer::UpdateUniformBuffer(const GameTimer& gt) {
 		ubo.mProj[1][1] *= -1.0f;
 
 		void* data;
-		const auto& bufferMemory = ritem.second.UniformBufferMemories[mCurentImageIndex];
+		const auto& bufferMemory = ritem->UniformBufferMemories[mCurentImageIndex];		
 		vkMapMemory(mDevice, bufferMemory, 0, sizeof(ubo), 0, &data);
 		std::memcpy(data, &ubo, sizeof(ubo));
 		vkUnmapMemory(mDevice, bufferMemory);
@@ -875,18 +939,19 @@ bool Renderer::UpdateDescriptorSet() {
 	for (auto& ritem : mRItems) {
 		for (size_t i = 0; i < SwapChainImageCount; ++i) {
 			VkDescriptorBufferInfo bufferInfo = {};
-			bufferInfo.buffer = ritem.second.UniformBuffers[i];
+			bufferInfo.buffer = ritem->UniformBuffers[i];
 			bufferInfo.offset = 0;
 			bufferInfo.range = sizeof(UniformBufferObject);
 
+			const auto& mat = mMaterials[ritem->MatName];
 			VkDescriptorImageInfo imageInfo = {};
 			imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			imageInfo.imageView = mTextureImageView;
-			imageInfo.sampler = mTextureSampler;
+			imageInfo.imageView = mat->TextureImageView;
+			imageInfo.sampler = mat->TextureSampler;
 
 			std::array<VkWriteDescriptorSet, 2> descriptorWrites = {};
 			descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[0].dstSet = ritem.second.DescriptorSets[i];
+			descriptorWrites[0].dstSet = ritem->DescriptorSets[i];
 			descriptorWrites[0].dstBinding = 0;
 			descriptorWrites[0].dstArrayElement = 0;
 			descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -894,7 +959,7 @@ bool Renderer::UpdateDescriptorSet() {
 			descriptorWrites[0].pBufferInfo = &bufferInfo;
 
 			descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrites[1].dstSet = ritem.second.DescriptorSets[i];
+			descriptorWrites[1].dstSet = ritem->DescriptorSets[i];
 			descriptorWrites[1].dstBinding = 1;
 			descriptorWrites[1].dstArrayElement = 0;
 			descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -908,10 +973,10 @@ bool Renderer::UpdateDescriptorSet() {
 	return true;
 }
 
-bool Renderer::CreateVertexBuffer(RenderItem& inRItem) {
-	auto& vertices = inRItem.Vertices;
-	auto& vertexBuffer = inRItem.VertexBuffer;
-	auto& vertexBufferMemory = inRItem.VertexBufferMemory;
+bool Renderer::CreateVertexBuffer(Mesh* pMesh) {
+	auto& vertices = pMesh->Vertices;
+	auto& vertexBuffer = pMesh->VertexBuffer;
+	auto& vertexBufferMemory = pMesh->VertexBufferMemory;
 
 	VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
@@ -948,10 +1013,10 @@ bool Renderer::CreateVertexBuffer(RenderItem& inRItem) {
 	return true;
 }
 
-bool Renderer::CreateIndexBuffer(RenderItem& inRItem) {
-	auto& indices = inRItem.Indices;
-	auto& indexBuffer = inRItem.IndexBuffer;
-	auto& indexBufferMemory = inRItem.IndexBufferMemory;
+bool Renderer::CreateIndexBuffer(Mesh* pMesh) {
+	auto& indices = pMesh->Indices;
+	auto& indexBuffer = pMesh->IndexBuffer;
+	auto& indexBufferMemory = pMesh->IndexBufferMemory;
 
 	VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
@@ -988,11 +1053,11 @@ bool Renderer::CreateIndexBuffer(RenderItem& inRItem) {
 	return true;
 }
 
-bool Renderer::CreateUniformBuffers(RenderItem& inRItem) {
+bool Renderer::CreateUniformBuffers(RenderItem* inRItem) {
 	VkDeviceSize bufferSize = sizeof(UniformBufferObject);
 
-	inRItem.UniformBuffers.resize(SwapChainImageCount);
-	inRItem.UniformBufferMemories.resize(SwapChainImageCount);
+	inRItem->UniformBuffers.resize(SwapChainImageCount);
+	inRItem->UniformBufferMemories.resize(SwapChainImageCount);
 
 	for (size_t i = 0; i < SwapChainImageCount; ++i) {
 		CreateBuffer(
@@ -1001,8 +1066,8 @@ bool Renderer::CreateUniformBuffers(RenderItem& inRItem) {
 			bufferSize,
 			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			inRItem.UniformBuffers[i],
-			inRItem.UniformBufferMemories[i]);
+			inRItem->UniformBuffers[i],
+			inRItem->UniformBufferMemories[i]);
 	}
 
 	return true;
@@ -1012,8 +1077,8 @@ bool Renderer::RecreateUniformBuffers() {
 	VkDeviceSize bufferSize = sizeof(UniformBufferObject);
 
 	for (auto& ritem : mRItems) {
-		ritem.second.UniformBuffers.resize(SwapChainImageCount);
-		ritem.second.UniformBufferMemories.resize(SwapChainImageCount);
+		ritem ->UniformBuffers.resize(SwapChainImageCount);
+		ritem ->UniformBufferMemories.resize(SwapChainImageCount);
 
 		for (size_t i = 0; i < SwapChainImageCount; ++i) {
 			CreateBuffer(
@@ -1022,15 +1087,15 @@ bool Renderer::RecreateUniformBuffers() {
 				bufferSize,
 				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-				ritem.second.UniformBuffers[i],
-				ritem.second.UniformBufferMemories[i]);
+				ritem->UniformBuffers[i],
+				ritem->UniformBufferMemories[i]);
 		}
 	}
 
 	return true;
 }
 
-bool Renderer::CreateDescriptorSets(RenderItem& inRItem) {
+bool Renderer::CreateDescriptorSets(RenderItem* inRItem) {
 	std::vector<VkDescriptorSetLayout> layouts(SwapChainImageCount, mDescriptorSetLayout);
 
 	VkDescriptorSetAllocateInfo allocInfo = {};
@@ -1039,8 +1104,8 @@ bool Renderer::CreateDescriptorSets(RenderItem& inRItem) {
 	allocInfo.descriptorSetCount = static_cast<std::uint32_t>(SwapChainImageCount);
 	allocInfo.pSetLayouts = layouts.data();
 
-	inRItem.DescriptorSets.resize(SwapChainImageCount);
-	if (vkAllocateDescriptorSets(mDevice, &allocInfo, inRItem.DescriptorSets.data()) != VK_SUCCESS) {
+	inRItem->DescriptorSets.resize(SwapChainImageCount);
+	if (vkAllocateDescriptorSets(mDevice, &allocInfo, inRItem->DescriptorSets.data()) != VK_SUCCESS) {
 		ReturnFalse(L"Failed to allocate descriptor sets");
 	}
 
@@ -1057,8 +1122,8 @@ bool Renderer::RecreateDescriptorSets() {
 	allocInfo.pSetLayouts = layouts.data();
 
 	for (auto& ritem : mRItems) {
-		ritem.second.DescriptorSets.resize(SwapChainImageCount);
-		if (vkAllocateDescriptorSets(mDevice, &allocInfo, ritem.second.DescriptorSets.data()) != VK_SUCCESS) {
+		ritem->DescriptorSets.resize(SwapChainImageCount);
+		if (vkAllocateDescriptorSets(mDevice, &allocInfo, ritem->DescriptorSets.data()) != VK_SUCCESS) {
 			ReturnFalse(L"Failed to allocate descriptor sets");
 		}
 	}
@@ -1066,10 +1131,10 @@ bool Renderer::RecreateDescriptorSets() {
 	return true;
 }
 
-bool Renderer::CreateTextureImage(int inTexWidth, int inTexHeight, void* pData) {
+bool Renderer::CreateTextureImage(int inTexWidth, int inTexHeight, void* pData, Material* ioMaterial) {
 	VkDeviceSize imageSize = inTexWidth * inTexHeight * 4;
 
-	mMipLevels = static_cast<std::uint32_t>(std::floor(std::log2(std::max(inTexWidth, inTexHeight)))) + 1;
+	ioMaterial->MipLevels = static_cast<std::uint32_t>(std::floor(std::log2(std::max(inTexWidth, inTexHeight)))) + 1;
 
 	VkBuffer stagingBuffer;
 	VkDeviceMemory stagingBufferMemory;
@@ -1093,31 +1158,31 @@ bool Renderer::CreateTextureImage(int inTexWidth, int inTexHeight, void* pData) 
 		mDevice,
 		inTexWidth,
 		inTexHeight,
-		mMipLevels,
+		ioMaterial->MipLevels,
 		VK_SAMPLE_COUNT_1_BIT,
 		ImageFormat,
 		VK_IMAGE_TILING_OPTIMAL,
 		VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-		mTextureImage,
-		mTextureImageMemory));
+		ioMaterial->TextureImage,
+		ioMaterial->TextureImageMemory));
 
 	CheckReturn(TransitionImageLayout(
 		mDevice,
 		mGraphicsQueue,
 		mCommandPool,
-		mTextureImage,
+		ioMaterial->TextureImage,
 		ImageFormat,
 		VK_IMAGE_LAYOUT_UNDEFINED,
 		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-		mMipLevels));
+		ioMaterial->MipLevels));
 
 	CopyBufferToImage(
 		mDevice,
 		mGraphicsQueue,
 		mCommandPool,
 		stagingBuffer,
-		mTextureImage,
+		ioMaterial->TextureImage,
 		static_cast<std::uint32_t>(inTexWidth),
 		static_cast<std::uint32_t>(inTexHeight));
 
@@ -1126,11 +1191,11 @@ bool Renderer::CreateTextureImage(int inTexWidth, int inTexHeight, void* pData) 
 		mDevice,
 		mGraphicsQueue,
 		mCommandPool,
-		mTextureImage,
+		ioMaterial->TextureImage,
 		ImageFormat,
 		inTexWidth,
 		inTexHeight,
-		mMipLevels);
+		ioMaterial->MipLevels);
 
 	vkDestroyBuffer(mDevice, stagingBuffer, nullptr);
 	vkFreeMemory(mDevice, stagingBufferMemory, nullptr);
@@ -1138,8 +1203,34 @@ bool Renderer::CreateTextureImage(int inTexWidth, int inTexHeight, void* pData) 
 	return true;
 }
 
-bool Renderer::CreateTextureImageView() {
-	CheckReturn(CreateImageView(mDevice, mTextureImage, ImageFormat, mMipLevels, VK_IMAGE_ASPECT_COLOR_BIT, mTextureImageView));
+bool Renderer::CreateTextureImageView(Material* ioMaterial) {
+	CheckReturn(CreateImageView(mDevice, ioMaterial->TextureImage, ImageFormat, ioMaterial->MipLevels, VK_IMAGE_ASPECT_COLOR_BIT, ioMaterial->TextureImageView));
+
+	return true;
+}
+
+bool Renderer::CreateTextureSampler(Material* ioMaterial) {
+	VkSamplerCreateInfo samplerInfo = {};
+	samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+	samplerInfo.magFilter = VK_FILTER_LINEAR;
+	samplerInfo.minFilter = VK_FILTER_LINEAR;
+	samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	samplerInfo.anisotropyEnable = VK_TRUE;
+	samplerInfo.maxAnisotropy = 16;
+	samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+	samplerInfo.unnormalizedCoordinates = VK_FALSE;
+	samplerInfo.compareEnable = VK_FALSE;
+	samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+	samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+	samplerInfo.mipLodBias = 0.0f;
+	samplerInfo.minLod = 0.0f;
+	samplerInfo.maxLod = static_cast<float>(ioMaterial->MipLevels);
+
+	if (vkCreateSampler(mDevice, &samplerInfo, nullptr, &ioMaterial->TextureSampler) != VK_SUCCESS) {
+		ReturnFalse(L"Failed to create texture sampler");
+	}
 
 	return true;
 }
@@ -1334,32 +1425,6 @@ bool Renderer::CreateFramebuffers() {
 		if (vkCreateFramebuffer(mDevice, &framebufferInfo, nullptr, &mSwapChainFramebuffers[i]) != VK_SUCCESS) {
 			ReturnFalse(L"Failed to create framebuffer");
 		}
-	}
-
-	return true;
-}
-
-bool Renderer::CreateTextureSamplers() {
-	VkSamplerCreateInfo samplerInfo = {};
-	samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-	samplerInfo.magFilter = VK_FILTER_LINEAR;
-	samplerInfo.minFilter = VK_FILTER_LINEAR;
-	samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-	samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-	samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-	samplerInfo.anisotropyEnable = VK_TRUE;
-	samplerInfo.maxAnisotropy = 16;
-	samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-	samplerInfo.unnormalizedCoordinates = VK_FALSE;
-	samplerInfo.compareEnable = VK_FALSE;
-	samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
-	samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-	samplerInfo.mipLodBias = 0.0f;
-	samplerInfo.minLod = 0.0f;
-	samplerInfo.maxLod = static_cast<float>(mMipLevels);
-
-	if (vkCreateSampler(mDevice, &samplerInfo, nullptr, &mTextureSampler) != VK_SUCCESS) {
-		ReturnFalse(L"Failed to create texture sampler");
 	}
 
 	return true;

@@ -21,6 +21,7 @@ public:
 	void MsgProc(GLFWwindow* pWnd, int inKey, int inScanCode, int inAction, int inMods);
 	void OnResize(int inWidth, int inHeight);
 	void OnPositionChanged(int inX, int inY);
+	void OnFocusChanged(int inFocused);
 
 protected:
 	bool InitMainWnd();
@@ -36,6 +37,7 @@ protected:
 
 private:
 	bool bQuit = false;
+	bool bFocused = true;
 	bool bIsCleanedUp = false;
 
 	int mClientWidth = 800;
@@ -55,7 +57,7 @@ private:
 	double mCursorDeltaX = 0.0f;
 	double mCursorDeltaY = 0.0f;
 
-	glm::vec3 mCameraPos = glm::vec3(0.0f, 0.0f, 1.0f);
+	glm::vec3 mCameraPos = glm::vec3(0.0f, 2.0f, -6.0f);
 	float mPitch = 0.0f;
-	float mYaw = 180.0f;
+	float mYaw = 0.0f;
 };
